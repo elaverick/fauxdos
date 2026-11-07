@@ -1,0 +1,73 @@
+; Usage: WRITE filename text to store. Uses the OS SAVE system call.
+OS_SAVE=$F20F
+ARG_LO=$06
+ARG_HI=$07
+PTR_LO=$00
+PTR_HI=$01
+DATA_LO=$02
+DATA_HI=$03
+SIZE_LO=$08
+SIZE_HI=$09
+.org $4000
+START:
+    LDY #$00
+FIND_SEPARATOR:
+    LDA (ARG_LO),Y
+    BEQ USAGE_ERROR
+    CMP #' '
+    BEQ NAME_END
+    INY
+    JMP FIND_SEPARATOR
+NAME_END:
+    LDA #$00
+    STA (ARG_LO),Y
+    INY
+    TYA
+    CLC
+    ADC ARG_LO
+    STA DATA_LO
+    LDA ARG_HI
+    ADC #$00
+    STA DATA_HI
+    LDA ARG_LO
+    STA PTR_LO
+    LDA ARG_HI
+    STA PTR_HI
+    LDY #$00
+COUNT_BYTES:
+    LDA (DATA_LO),Y
+    BEQ COUNT_DONE
+    INY
+    BNE COUNT_BYTES
+COUNT_DONE:
+    STY SIZE_LO
+    LDA #$00
+    STA SIZE_HI
+    JSR OS_SAVE
+    BCS DISK_ERROR
+    LDA #<SAVED_TEXT
+    STA PTR_LO
+    LDA #>SAVED_TEXT
+    STA PTR_HI
+    JSR $F203
+    RTS
+USAGE_ERROR:
+    LDA #<USAGE_TEXT
+    STA PTR_LO
+    LDA #>USAGE_TEXT
+    STA PTR_HI
+    JSR $F203
+    RTS
+DISK_ERROR:
+    LDA #<ERROR_TEXT
+    STA PTR_LO
+    LDA #>ERROR_TEXT
+    STA PTR_HI
+    JSR $F203
+    RTS
+SAVED_TEXT:
+    .byte "SAVED",$0D,0
+USAGE_TEXT:
+    .byte "USAGE: WRITE NAME TEXT",$0D,0
+ERROR_TEXT:
+    .byte "? DISK ERROR",$0D,0

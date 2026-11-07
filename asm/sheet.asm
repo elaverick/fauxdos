@@ -1,0 +1,464 @@
+; FauxSheet - interactive 6502 spreadsheet-style mock application.
+; A deliberately simple worksheet mock-up: 8 columns x 16 rows, fixed-width
+; text cells, keyboard navigation and in-place text editing. No calculations
+; or persistence are implemented yet.
+OS_PUTCHAR=$F200
+OS_PUTS=$F203
+OS_GETCHAR=$F206
+OS_CLS=$F215
+PTR_LO=$00
+PTR_HI=$01
+CELL_PTR_LO=$02
+CELL_PTR_HI=$03
+CUR_COL=$40
+CUR_ROW=$41
+EDIT_POS=$42
+EDIT_ACTIVE=$43
+DRAW_ROW=$44
+DRAW_COL=$45
+KEY_VALUE=$46
+TMP_ROW=$47
+TMP_COL=$48
+
+.org $4000
+START:
+    LDA #$00
+    STA CUR_COL
+    STA CUR_ROW
+    STA EDIT_POS
+    STA EDIT_ACTIVE
+    JMP REDRAW_AND_WAIT
+
+REDRAW_AND_WAIT:
+    JSR REDRAW
+KEY_LOOP:
+    JSR OS_GETCHAR
+    STA KEY_VALUE
+    CMP #$1B
+    BNE KEY_NOT_ESCAPE
+    JMP EXIT_APP
+KEY_NOT_ESCAPE:
+    CMP #$11
+    BEQ MOVE_UP
+    CMP #$12
+    BEQ MOVE_DOWN
+    CMP #$13
+    BEQ MOVE_LEFT
+    CMP #$14
+    BEQ MOVE_RIGHT
+    CMP #$09
+    BEQ MOVE_TAB
+    CMP #$0D
+    BEQ MOVE_DOWN
+    CMP #$15
+    BNE KEY_NOT_HELP
+    JMP SHOW_HELP
+KEY_NOT_HELP:
+    CMP #$08
+    BNE KEY_NOT_BACKSPACE
+    JMP BACKSPACE_KEY
+KEY_NOT_BACKSPACE:
+    CMP #$7F
+    BNE KEY_NOT_DELETE
+    JMP DELETE_KEY
+KEY_NOT_DELETE:
+    CMP #$20
+    BCC KEY_LOOP
+    CMP #$7F
+    BCS KEY_LOOP
+    JSR INSERT_CHAR
+    JMP REDRAW_AND_WAIT
+
+MOVE_UP:
+    LDA CUR_ROW
+    BEQ MOVE_FINISH
+    DEC CUR_ROW
+    JMP MOVE_FINISH
+MOVE_DOWN:
+    LDA CUR_ROW
+    CMP #$0F
+    BCS MOVE_FINISH
+    INC CUR_ROW
+    JMP MOVE_FINISH
+MOVE_LEFT:
+    LDA CUR_COL
+    BEQ MOVE_FINISH
+    DEC CUR_COL
+    JMP MOVE_FINISH
+MOVE_RIGHT:
+    LDA CUR_COL
+    CMP #$07
+    BCS MOVE_FINISH
+    INC CUR_COL
+    JMP MOVE_FINISH
+MOVE_TAB:
+    LDA CUR_COL
+    CMP #$07
+    BCS TAB_NEXT_ROW
+    INC CUR_COL
+    JMP MOVE_FINISH
+TAB_NEXT_ROW:
+    LDA #$00
+    STA CUR_COL
+    LDA CUR_ROW
+    CMP #$0F
+    BCS TAB_TOP_ROW
+    INC CUR_ROW
+    JMP MOVE_FINISH
+TAB_TOP_ROW:
+    LDA #$00
+    STA CUR_ROW
+MOVE_FINISH:
+    LDA #$00
+    STA EDIT_ACTIVE
+    STA EDIT_POS
+    JMP REDRAW_AND_WAIT
+
+INSERT_CHAR:
+    JSR CALC_CURRENT_CELL
+    LDA EDIT_ACTIVE
+    BNE INSERT_AT_POSITION
+    LDY #$00
+    LDA #$20
+CLEAR_FOR_ENTRY:
+    STA (CELL_PTR_LO),Y
+    INY
+    CPY #$07
+    BNE CLEAR_FOR_ENTRY
+    LDA #$01
+    STA EDIT_ACTIVE
+    LDA #$00
+    STA EDIT_POS
+INSERT_AT_POSITION:
+    LDA EDIT_POS
+    CMP #$07
+    BCS INSERT_DONE
+    TAY
+    LDA KEY_VALUE
+    STA (CELL_PTR_LO),Y
+    INC EDIT_POS
+INSERT_DONE:
+    RTS
+
+BACKSPACE_KEY:
+    JSR CALC_CURRENT_CELL
+    LDA EDIT_ACTIVE
+    BEQ CLEAR_CURRENT_CELL
+    LDA EDIT_POS
+    BEQ BACKSPACE_DONE
+    DEC EDIT_POS
+    LDY EDIT_POS
+    LDA #$20
+    STA (CELL_PTR_LO),Y
+    JMP BACKSPACE_DONE
+DELETE_KEY:
+CLEAR_CURRENT_CELL:
+    JSR CALC_CURRENT_CELL
+    LDY #$00
+    LDA #$20
+CLEAR_CELL_LOOP:
+    STA (CELL_PTR_LO),Y
+    INY
+    CPY #$07
+    BNE CLEAR_CELL_LOOP
+    LDA #$01
+    STA EDIT_ACTIVE
+    LDA #$00
+    STA EDIT_POS
+BACKSPACE_DONE:
+    JMP REDRAW_AND_WAIT
+
+SHOW_HELP:
+    JSR OS_CLS
+    LDA #<HELP_TITLE
+    STA PTR_LO
+    LDA #>HELP_TITLE
+    STA PTR_HI
+    JSR OS_PUTS
+    LDA #<HELP_LINE1
+    STA PTR_LO
+    LDA #>HELP_LINE1
+    STA PTR_HI
+    JSR OS_PUTS
+    LDA #<HELP_LINE2
+    STA PTR_LO
+    LDA #>HELP_LINE2
+    STA PTR_HI
+    JSR OS_PUTS
+    LDA #<HELP_LINE3
+    STA PTR_LO
+    LDA #>HELP_LINE3
+    STA PTR_HI
+    JSR OS_PUTS
+    LDA #<HELP_LINE4
+    STA PTR_LO
+    LDA #>HELP_LINE4
+    STA PTR_HI
+    JSR OS_PUTS
+    LDA #<HELP_LINE5
+    STA PTR_LO
+    LDA #>HELP_LINE5
+    STA PTR_HI
+    JSR OS_PUTS
+    JSR OS_GETCHAR
+    JMP REDRAW_AND_WAIT
+
+EXIT_APP:
+    JSR OS_CLS
+    RTS
+
+; Complete screen redraw. The display is a 80x25 fixed-cell text terminal.
+REDRAW:
+    JSR OS_CLS
+    LDA #<TITLE_LINE
+    STA PTR_LO
+    LDA #>TITLE_LINE
+    STA PTR_HI
+    JSR OS_PUTS
+    LDA #<MENU_LINE
+    STA PTR_LO
+    LDA #>MENU_LINE
+    STA PTR_HI
+    JSR OS_PUTS
+    LDA #<RULE_LINE
+    STA PTR_LO
+    LDA #>RULE_LINE
+    STA PTR_HI
+    JSR OS_PUTS
+    JSR PRINT_FORMULA
+    LDA #<RULE_LINE
+    STA PTR_LO
+    LDA #>RULE_LINE
+    STA PTR_HI
+    JSR OS_PUTS
+    LDA #<COLUMN_LINE
+    STA PTR_LO
+    LDA #>COLUMN_LINE
+    STA PTR_HI
+    JSR OS_PUTS
+    LDA #<RULE_LINE
+    STA PTR_LO
+    LDA #>RULE_LINE
+    STA PTR_HI
+    JSR OS_PUTS
+    LDA #$00
+    STA DRAW_ROW
+DRAW_ROWS_LOOP:
+    JSR PRINT_ROW_NUMBER
+    LDA #'|'
+    JSR OS_PUTCHAR
+    LDA #$00
+    STA DRAW_COL
+DRAW_CELLS_LOOP:
+    JSR PRINT_DRAW_CELL
+    LDA #'|'
+    JSR OS_PUTCHAR
+    INC DRAW_COL
+    LDA DRAW_COL
+    CMP #$08
+    BNE DRAW_CELLS_LOOP
+    LDA #$0D
+    JSR OS_PUTCHAR
+    INC DRAW_ROW
+    LDA DRAW_ROW
+    CMP #$10
+    BNE DRAW_ROWS_LOOP
+    LDA #<RULE_LINE
+    STA PTR_LO
+    LDA #>RULE_LINE
+    STA PTR_HI
+    JSR OS_PUTS
+    LDA #<FOOTER_LINE
+    STA PTR_LO
+    LDA #>FOOTER_LINE
+    STA PTR_HI
+    JSR OS_PUTS
+    RTS
+
+PRINT_ROW_NUMBER:
+    LDA #' '
+    JSR OS_PUTCHAR
+    LDA DRAW_ROW
+    CMP #$09
+    BCS PRINT_ROW_TENS
+    LDA #'0'
+    JSR OS_PUTCHAR
+    LDA DRAW_ROW
+    CLC
+    ADC #'1'
+    JMP PRINT_ROW_UNITS
+PRINT_ROW_TENS:
+    LDA #'1'
+    JSR OS_PUTCHAR
+    LDA DRAW_ROW
+    SEC
+    SBC #$09
+    CLC
+    ADC #'0'
+PRINT_ROW_UNITS:
+    JSR OS_PUTCHAR
+    LDA #' '
+    JSR OS_PUTCHAR
+    RTS
+
+PRINT_DRAW_CELL:
+    LDA DRAW_ROW
+    STA TMP_ROW
+    LDA DRAW_COL
+    STA TMP_COL
+    JSR CALC_CELL_PTR
+    LDA DRAW_ROW
+    CMP CUR_ROW
+    BNE PRINT_NORMAL_CELL
+    LDA DRAW_COL
+    CMP CUR_COL
+    BNE PRINT_NORMAL_CELL
+    LDA #'['
+    JSR OS_PUTCHAR
+    LDY #$00
+PRINT_SELECTED_CHARS:
+    LDA (CELL_PTR_LO),Y
+    JSR OS_PUTCHAR
+    INY
+    CPY #$05
+    BNE PRINT_SELECTED_CHARS
+    LDA #']'
+    JSR OS_PUTCHAR
+    RTS
+PRINT_NORMAL_CELL:
+    LDY #$00
+PRINT_NORMAL_CHARS:
+    LDA (CELL_PTR_LO),Y
+    JSR OS_PUTCHAR
+    INY
+    CPY #$07
+    BNE PRINT_NORMAL_CHARS
+    RTS
+
+PRINT_FORMULA:
+    LDA #<FORMULA_PREFIX
+    STA PTR_LO
+    LDA #>FORMULA_PREFIX
+    STA PTR_HI
+    JSR OS_PUTS
+    LDA CUR_COL
+    CLC
+    ADC #'A'
+    JSR OS_PUTCHAR
+    LDA CUR_ROW
+    CMP #$09
+    BCS FORMULA_TENS
+    LDA CUR_ROW
+    CLC
+    ADC #'1'
+    JSR OS_PUTCHAR
+    JMP FORMULA_VALUE
+FORMULA_TENS:
+    LDA #'1'
+    JSR OS_PUTCHAR
+    LDA CUR_ROW
+    SEC
+    SBC #$09
+    CLC
+    ADC #'0'
+    JSR OS_PUTCHAR
+FORMULA_VALUE:
+    LDA #<FORMULA_MIDDLE
+    STA PTR_LO
+    LDA #>FORMULA_MIDDLE
+    STA PTR_HI
+    JSR OS_PUTS
+    LDA CUR_ROW
+    STA TMP_ROW
+    LDA CUR_COL
+    STA TMP_COL
+    JSR CALC_CELL_PTR
+    LDY #$00
+FORMULA_CELL_LOOP:
+    LDA (CELL_PTR_LO),Y
+    JSR OS_PUTCHAR
+    INY
+    CPY #$07
+    BNE FORMULA_CELL_LOOP
+    LDA #$0D
+    JSR OS_PUTCHAR
+    RTS
+
+; Calculate CELL_PTR = $6000 + TMP_ROW*56 + TMP_COL*7.
+CALC_CURRENT_CELL:
+    LDA CUR_ROW
+    STA TMP_ROW
+    LDA CUR_COL
+    STA TMP_COL
+    JMP CALC_CELL_PTR
+CALC_CELL_PTR:
+    LDA #$00
+    STA CELL_PTR_LO
+    LDA #$60
+    STA CELL_PTR_HI
+    LDX TMP_ROW
+CELL_ROW_ADD:
+    CPX #$00
+    BEQ CELL_COL_BEGIN
+    CLC
+    LDA CELL_PTR_LO
+    ADC #$38
+    STA CELL_PTR_LO
+    LDA CELL_PTR_HI
+    ADC #$00
+    STA CELL_PTR_HI
+    DEX
+    JMP CELL_ROW_ADD
+CELL_COL_BEGIN:
+    LDX TMP_COL
+CELL_COL_ADD:
+    CPX #$00
+    BEQ CELL_PTR_DONE
+    CLC
+    LDA CELL_PTR_LO
+    ADC #$07
+    STA CELL_PTR_LO
+    LDA CELL_PTR_HI
+    ADC #$00
+    STA CELL_PTR_HI
+    DEX
+    JMP CELL_COL_ADD
+CELL_PTR_DONE:
+    RTS
+
+TITLE_LINE:
+    .byte " FAUXSHEET 1.0                         UNTITLED WORKSHEET",$0D,0
+MENU_LINE:
+    .byte " FILE     EDIT     VIEW     HELP          F1 HELP   ESC EXIT",$0D,0
+RULE_LINE:
+    .byte "    +-------+-------+-------+-------+-------+-------+-------+-------+",$0D,0
+FORMULA_PREFIX:
+    .byte " CELL ",0
+FORMULA_MIDDLE:
+    .byte "   fx: ",0
+COLUMN_LINE:
+    .byte "    |   A   |   B   |   C   |   D   |   E   |   F   |   G   |   H   |",$0D,0
+FOOTER_LINE:
+    .byte " ARROWS MOVE  TAB NEXT  ENTER DOWN  TYPE EDIT  BS/DEL CLEAR  ESC EXIT",0
+HELP_TITLE:
+    .byte " FAUXSHEET - KEYBOARD HELP",$0D,$0D,0
+HELP_LINE1:
+    .byte " ARROW KEYS     Move the selected cell",$0D,0
+HELP_LINE2:
+    .byte " TAB            Move to the next cell",$0D,0
+HELP_LINE3:
+    .byte " ENTER          Move down one row",$0D,0
+HELP_LINE4:
+    .byte " TYPE           Replace the selected cell and enter text",$0D,0
+HELP_LINE5:
+    .byte " BACKSPACE      Erase one character; DELETE clears the cell",$0D," ESC            Return to FauxDOS",$0D,$0D," Press any key to return to the worksheet...",$0D,0
+
+; 8 columns x 16 rows, seven visible characters per cell (896 bytes).
+.org $6000
+SAMPLE_CELLS:
+    .byte "PRODUCT","QTY    ","PRICE  ","TOTAL  ","STATUS ","OWNER  ","REGION ","REF    "
+    .byte "ORBITAL","2      ","125    ","250    ","READY  ","MIRA   ","NORTH  ","A-001  "
+    .byte "PLASMA ","4      ","80     ","320    ","READY  ","JUNO   ","WEST   ","B-014  "
+    .byte "SENSOR ","3      ","45     ","135    ","HOLD   ","KAI    ","EAST   ","C-207  "
+    .byte "DRONE  ","1      ","210    ","210    ","READY  ","MIRA   ","NORTH  ","D-031  "
+    .fill 896-280,32

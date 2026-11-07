@@ -1,0 +1,6 @@
+{
+  "name": "fauxdos-6502mp-webtoy",
+  "private": true,
+  "type": "module",
+  "scripts": { "build": "./build.sh", "test": "node --test tests/*.test.mjs" }
+}

@@ -1,0 +1,567 @@
+; FauxDOS 6502 machine ROM. All code here is assembled for the real 6502.
+VIDEO_DATA=$D000
+VIDEO_CONTROL=$D001
+KEYBOARD_DATA=$D010
+DISK_COMMAND=$D100
+DISK_STATUS=$D101
+DISK_NAME_LO=$D102
+DISK_NAME_HI=$D103
+DISK_PTR_LO=$D104
+DISK_PTR_HI=$D105
+DISK_SIZE_LO=$D106
+DISK_SIZE_HI=$D107
+DISK_DIR_COUNT=$D108
+PTR_LO=$00
+PTR_HI=$01
+DATA_LO=$02
+DATA_HI=$03
+SIZE_LO=$08
+SIZE_HI=$09
+ARG_LO=$06
+ARG_HI=$07
+DRIVE_LETTER=$10
+OUTPUT_SEMAPHORE=$11
+DISK_SEMAPHORE=$1A
+CMD_BUFFER=$0200
+DIR_BUFFER=$0300
+EXEC_ADDRESS=$4000
+
+.org $F000
+RESET:
+    LDA #$01
+    STA VIDEO_CONTROL
+    LDA #'C'
+    STA DRIVE_LETTER
+    LDA #<BANNER
+    STA PTR_LO
+    LDA #>BANNER
+    STA PTR_HI
+    JSR $F203
+MAIN_LOOP:
+    LDA DRIVE_LETTER
+    JSR $F200
+    LDA # '>'
+    JSR $F200
+    LDA #' '
+    JSR $F200
+    LDX #$00
+READ_LINE:
+    JSR $F206
+    CMP #$0D
+    BEQ LINE_READY
+    CMP #$08
+    BEQ BACKSPACE
+    CMP #$20
+    BCC READ_LINE
+    CPX #$3F
+    BCS READ_LINE
+    STA CMD_BUFFER,X
+    JSR $F200
+    INX
+    JMP READ_LINE
+BACKSPACE:
+    CPX #$00
+    BEQ READ_LINE
+    DEX
+    LDA #$08
+    JSR $F200
+    LDA #' '
+    JSR $F200
+    LDA #$08
+    JSR $F200
+    JMP READ_LINE
+LINE_READY:
+    LDA #$00
+    STA CMD_BUFFER,X
+    LDA #$0D
+    JSR $F200
+    JSR UPPERCASE_LINE
+    LDA CMD_BUFFER
+    BEQ MAIN_LOOP
+    JSR PARSE_ARGUMENTS
+    JSR BUILTIN_DISPATCH
+    BCC TRY_EXECUTABLE
+    JMP MAIN_LOOP
+TRY_EXECUTABLE:
+    LDA #<CMD_BUFFER
+    STA PTR_LO
+    LDA #>CMD_BUFFER
+    STA PTR_HI
+    JSR $F212
+    BCC MAIN_LOOP
+    LDA #<NOT_FOUND
+    STA PTR_LO
+    LDA #>NOT_FOUND
+    STA PTR_HI
+    JSR $F203
+    JMP MAIN_LOOP
+UPPERCASE_LINE:
+    LDX #$00
+UPPERCASE_NEXT:
+    LDA CMD_BUFFER,X
+    BEQ UPPERCASE_DONE
+    CMP #' '
+    BEQ UPPERCASE_DONE
+    CMP #'a'
+    BCC UPPERCASE_SKIP
+    CMP #'z'+1
+    BCS UPPERCASE_SKIP
+    SEC
+    SBC #$20
+    STA CMD_BUFFER,X
+UPPERCASE_SKIP:
+    INX
+    JMP UPPERCASE_NEXT
+UPPERCASE_DONE:
+    RTS
+PARSE_ARGUMENTS:
+    LDX #$00
+PARSE_SCAN:
+    LDA CMD_BUFFER,X
+    BEQ PARSE_NO_ARGUMENTS
+    CMP #' '
+    BEQ PARSE_SEPARATOR
+    INX
+    BNE PARSE_SCAN
+PARSE_SEPARATOR:
+    LDA #$00
+    STA CMD_BUFFER,X
+    INX
+PARSE_SKIP_SPACES:
+    LDA CMD_BUFFER,X
+    CMP #' '
+    BNE PARSE_ARGUMENT_START
+    INX
+    BNE PARSE_SKIP_SPACES
+PARSE_ARGUMENT_START:
+    TXA
+    CLC
+    ADC #<CMD_BUFFER
+    STA ARG_LO
+    LDA #>CMD_BUFFER
+    ADC #$00
+    STA ARG_HI
+    RTS
+PARSE_NO_ARGUMENTS:
+    LDA #$00
+    STA $0240
+    LDA #<$0240
+    STA ARG_LO
+    LDA #>$0240
+    STA ARG_HI
+    RTS
+BANNER:
+    .byte "FAUXDOS 6502 - READY",$0D
+    .byte "TYPE HELP FOR COMMANDS",$0D,0
+NOT_FOUND:
+    .byte "? COMMAND NOT FOUND",$0D,0
+
+; Built-in commands live in ROM. External commands remain ordinary disk files.
+.org $F700
+BUILTIN_DISPATCH:
+    LDA CMD_BUFFER
+    CMP #'C'
+    BNE BUILTIN_CHECK_M
+    LDA CMD_BUFFER+1
+    CMP #'L'
+    BNE BUILTIN_REJECT_C
+    LDA CMD_BUFFER+2
+    CMP #'S'
+    BNE BUILTIN_REJECT_C
+    LDA CMD_BUFFER+3
+    BNE BUILTIN_REJECT_C
+    JSR OS_CLS
+    SEC
+    RTS
+BUILTIN_REJECT_C:
+    JMP BUILTIN_UNKNOWN
+BUILTIN_CHECK_M:
+    LDA CMD_BUFFER
+    CMP #'M'
+    BNE BUILTIN_CHECK_R
+    LDA CMD_BUFFER+1
+    CMP #'K'
+    BNE BUILTIN_REJECT_M
+    LDA CMD_BUFFER+2
+    CMP #'D'
+    BNE BUILTIN_REJECT_M
+    LDA CMD_BUFFER+3
+    CMP #'I'
+    BNE BUILTIN_REJECT_M
+    LDA CMD_BUFFER+4
+    CMP #'R'
+    BNE BUILTIN_REJECT_M
+    LDA CMD_BUFFER+5
+    BNE BUILTIN_REJECT_M
+    JSR BUILTIN_SET_NAME
+    JSR OS_MKDIR
+    BCS BUILTIN_DISK_ERROR
+    LDA #<MSG_MKDIR
+    STA PTR_LO
+    LDA #>MSG_MKDIR
+    STA PTR_HI
+    JMP BUILTIN_PRINT
+BUILTIN_REJECT_M:
+    JMP BUILTIN_UNKNOWN
+BUILTIN_CHECK_R:
+    LDA CMD_BUFFER
+    CMP #'R'
+    BNE BUILTIN_REJECT_R
+    LDA CMD_BUFFER+1
+    CMP #'M'
+    BNE BUILTIN_REJECT_R
+    LDA CMD_BUFFER+2
+    BEQ BUILTIN_DO_RM
+    CMP #'D'
+    BNE BUILTIN_REJECT_R
+    LDA CMD_BUFFER+3
+    CMP #'I'
+    BNE BUILTIN_REJECT_R
+    LDA CMD_BUFFER+4
+    CMP #'R'
+    BNE BUILTIN_REJECT_R
+    LDA CMD_BUFFER+5
+    BNE BUILTIN_REJECT_R
+    JSR BUILTIN_SET_NAME
+    JSR OS_RMDIR
+    BCS BUILTIN_DISK_ERROR
+    LDA #<MSG_RMDIR
+    STA PTR_LO
+    LDA #>MSG_RMDIR
+    STA PTR_HI
+    JMP BUILTIN_PRINT
+BUILTIN_REJECT_R:
+    JMP BUILTIN_UNKNOWN
+BUILTIN_DO_RM:
+    JSR BUILTIN_SET_NAME
+    JSR OS_RM
+    BCS BUILTIN_DISK_ERROR
+    LDA #<MSG_RM
+    STA PTR_LO
+    LDA #>MSG_RM
+    STA PTR_HI
+    JMP BUILTIN_PRINT
+BUILTIN_SET_NAME:
+    LDA ARG_LO
+    STA PTR_LO
+    LDA ARG_HI
+    STA PTR_HI
+    RTS
+BUILTIN_DISK_ERROR:
+    LDA #<MSG_DISK_ERROR
+    STA PTR_LO
+    LDA #>MSG_DISK_ERROR
+    STA PTR_HI
+BUILTIN_PRINT:
+    JSR OS_PUTS
+    SEC
+    RTS
+BUILTIN_UNKNOWN:
+    CLC
+    RTS
+
+; Stable ROM jump table: preserve these addresses as the OS call ABI.
+.org $F200
+OS_PUTCHAR: JMP PUTCHAR_IMPL
+.org $F203
+OS_PUTS: JMP PUTS_IMPL
+.org $F206
+OS_GETCHAR: JMP GETCHAR_IMPL
+.org $F209
+OS_DIR: JMP DIR_IMPL
+.org $F20C
+OS_LOAD: JMP LOAD_IMPL
+.org $F20F
+OS_SAVE: JMP SAVE_IMPL
+.org $F212
+OS_EXEC: JMP EXEC_IMPL
+
+.org $F215
+OS_CLS:   JMP CLS_IMPL
+.org $F218
+OS_MKDIR: JMP MKDIR_IMPL
+.org $F21B
+OS_RM:    JMP RM_IMPL
+.org $F21E
+OS_RMDIR: JMP RMDIR_IMPL
+
+.org $F240
+; Semaphore zero protects the shared terminal output device.
+; PUTS holds it for the entire string so another guest thread cannot splice
+; characters into the middle. PUTCHAR also locks for standalone byte output.
+PUTCHAR_IMPL:
+    PHA
+    LDA #$00
+    STA OUTPUT_SEMAPHORE
+    .BYTE $72, OUTPUT_SEMAPHORE ; TLOCK OUTPUT_SEMAPHORE
+    PLA
+    JSR PUTCHAR_RAW
+    .BYTE $82, OUTPUT_SEMAPHORE ; TUNLOCK OUTPUT_SEMAPHORE
+    RTS
+PUTCHAR_RAW:
+    STA VIDEO_DATA
+    RTS
+PUTS_IMPL:
+    LDA #$00
+    STA OUTPUT_SEMAPHORE
+    .BYTE $72, OUTPUT_SEMAPHORE ; TLOCK OUTPUT_SEMAPHORE
+    LDY #$00
+PUTS_NEXT:
+    LDA (PTR_LO),Y
+    BEQ PUTS_DONE
+    JSR PUTCHAR_RAW
+    INY
+    BNE PUTS_NEXT
+    INC PTR_HI
+    JMP PUTS_NEXT
+PUTS_DONE:
+    .BYTE $82, OUTPUT_SEMAPHORE ; TUNLOCK OUTPUT_SEMAPHORE
+    RTS
+GETCHAR_IMPL:
+GETCHAR_WAIT:
+    LDA KEYBOARD_DATA
+    BEQ GETCHAR_WAIT
+    RTS
+; DIR writes 20-byte records at $0300: 16-byte name + size + reserved.
+DIR_IMPL:
+    LDA #<DIR_BUFFER
+    STA DISK_PTR_LO
+    LDA #>DIR_BUFFER
+    STA DISK_PTR_HI
+    LDA #$01
+    STA DISK_COMMAND
+    LDA DISK_DIR_COUNT
+    RTS
+; LOAD: PTR -> filename, DATA -> destination; returns size in SIZE, C=error.
+LOAD_IMPL:
+    LDA PTR_LO
+    STA DISK_NAME_LO
+    LDA PTR_HI
+    STA DISK_NAME_HI
+    LDA DATA_LO
+    STA DISK_PTR_LO
+    LDA DATA_HI
+    STA DISK_PTR_HI
+    LDA #$02
+    STA DISK_COMMAND
+    LDA DISK_SIZE_LO
+    STA SIZE_LO
+    LDA DISK_SIZE_HI
+    STA SIZE_HI
+    LDA DISK_STATUS
+    BEQ LOAD_OK
+    SEC
+    RTS
+LOAD_OK:
+    CLC
+    RTS
+; SAVE: PTR -> filename, DATA -> source, SIZE -> length; C=error.
+SAVE_IMPL:
+    LDA PTR_LO
+    STA DISK_NAME_LO
+    LDA PTR_HI
+    STA DISK_NAME_HI
+    LDA DATA_LO
+    STA DISK_PTR_LO
+    LDA DATA_HI
+    STA DISK_PTR_HI
+    LDA SIZE_LO
+    STA DISK_SIZE_LO
+    LDA SIZE_HI
+    STA DISK_SIZE_HI
+    LDA #$03
+    STA DISK_COMMAND
+    LDA DISK_STATUS
+    BEQ SAVE_OK
+    SEC
+    RTS
+SAVE_OK:
+    CLC
+    RTS
+; EXEC loads at $4000, then JSRs the loaded program. Program returns via RTS.
+EXEC_IMPL:
+    LDA #<EXEC_ADDRESS
+    STA DATA_LO
+    LDA #>EXEC_ADDRESS
+    STA DATA_HI
+    JSR $F20C
+    BCS EXEC_FAILED
+    JSR EXEC_ADDRESS
+    CLC
+    RTS
+EXEC_FAILED:
+    SEC
+    RTS
+
+.org $FFFA
+    .word RESET, RESET, RESET
+
+; Graphics BIOS jump table. Coordinates are 8-bit pixels (0..159, 0..99).
+; GFX_COLOUR: A=foreground, X=background (both palette indices 0..15).
+; GFX_PLOT: X=x, Y=y. GFX_LINE/RECT/FILLRECT use $12..$15:
+;   $12=x0, $13=y0, $14=x1, $15=y1.
+; GFX_MASK: A=0 disables transparent drawing; non-zero enables it.
+.org $F300
+GFX_COLOUR:  JMP GFX_COLOUR_IMPL
+GFX_PLOT:    JMP GFX_PLOT_IMPL
+GFX_LINE:    JMP GFX_LINE_IMPL
+GFX_RECT:    JMP GFX_RECT_IMPL
+GFX_FILLRECT: JMP GFX_FILLRECT_IMPL
+GFX_CLEAR:   JMP GFX_CLEAR_IMPL
+GFX_MASK:    JMP GFX_MASK_IMPL
+GFX_CIRCLE:  JMP GFX_CIRCLE_IMPL
+GFX_FILLCIRCLE: JMP GFX_FILLCIRCLE_IMPL
+GFX_BLIT:    JMP GFX_BLIT_IMPL
+
+.org $F330
+GFX_COLOUR_IMPL:
+    AND #$0F
+    STA $D020
+    TXA
+    AND #$0F
+    STA $D021
+    RTS
+GFX_PLOT_IMPL:
+    STX $D023
+    STY $D024
+    LDA #$02
+    STA $D022
+    RTS
+GFX_LINE_IMPL:
+    LDA $12
+    STA $D023
+    LDA $13
+    STA $D024
+    LDA $14
+    STA $D025
+    LDA $15
+    STA $D026
+    LDA #$03
+    STA $D022
+    RTS
+GFX_RECT_IMPL:
+    LDA $12
+    STA $D023
+    LDA $13
+    STA $D024
+    LDA $14
+    STA $D025
+    LDA $15
+    STA $D026
+    LDA #$04
+    STA $D022
+    RTS
+GFX_FILLRECT_IMPL:
+    LDA $12
+    STA $D023
+    LDA $13
+    STA $D024
+    LDA $14
+    STA $D025
+    LDA $15
+    STA $D026
+    LDA #$05
+    STA $D022
+    RTS
+GFX_CLEAR_IMPL:
+    LDA #$01
+    STA $D022
+    RTS
+GFX_MASK_IMPL:
+    CMP #$00
+    BEQ GFX_MASK_OFF
+    LDA #$01
+    BNE GFX_MASK_STORE
+GFX_MASK_OFF:
+    LDA #$00
+GFX_MASK_STORE:
+    STA $D027
+    RTS
+
+; Circle centre is $12/$13 and radius is $14. BLIT uses top-left $12/$13,
+; source pointer $16/$17, width $18 and height $19. Source is packed 1bpp
+; bitmap followed immediately by a packed 1bpp opacity mask (1=draw).
+.org $F400
+GFX_CIRCLE_IMPL:
+    LDA $12
+    STA $D023
+    LDA $13
+    STA $D024
+    LDA #$07
+    STA $D022
+    RTS
+GFX_FILLCIRCLE_IMPL:
+    LDA $12
+    STA $D023
+    LDA $13
+    STA $D024
+    LDA #$08
+    STA $D022
+    RTS
+GFX_BLIT_IMPL:
+    LDA $12
+    STA $D023
+    LDA $13
+    STA $D024
+    LDA #$09
+    STA $D022
+    RTS
+
+
+; Root directory operations. PTR points to a NUL-terminated name.
+; The disk controller implements mkdir=4, rm=5 and rmdir=6.
+.org $F500
+CLS_IMPL:
+    LDA #$00
+    STA $D028              ; switch back to text mode
+    LDA #$01
+    STA VIDEO_CONTROL      ; clear terminal and home its cursor
+    RTS
+MKDIR_IMPL:
+    LDA ARG_LO
+    STA PTR_LO
+    LDA ARG_HI
+    STA PTR_HI
+    LDA #$04
+    JMP DISK_NAMED_OPERATION
+RM_IMPL:
+    LDA ARG_LO
+    STA PTR_LO
+    LDA ARG_HI
+    STA PTR_HI
+    LDA #$05
+    JMP DISK_NAMED_OPERATION
+RMDIR_IMPL:
+    LDA ARG_LO
+    STA PTR_LO
+    LDA ARG_HI
+    STA PTR_HI
+    LDA #$06
+    JMP DISK_NAMED_OPERATION
+DISK_NAMED_OPERATION:
+    PHA
+    LDA #$01
+    STA DISK_SEMAPHORE
+    .BYTE $72, DISK_SEMAPHORE ; TLOCK disk semaphore 1
+    LDA PTR_LO
+    STA DISK_NAME_LO
+    LDA PTR_HI
+    STA DISK_NAME_HI
+    PLA
+    STA DISK_COMMAND
+    LDA DISK_STATUS
+    BEQ DISK_NAMED_OK
+    .BYTE $82, DISK_SEMAPHORE ; TUNLOCK disk semaphore 1
+    SEC
+    RTS
+DISK_NAMED_OK:
+    .BYTE $82, DISK_SEMAPHORE
+    CLC
+    RTS
+
+; Command response strings are kept away from the fixed jump table.
+.org $F5C0
+MSG_MKDIR: .byte "DIRECTORY CREATED",$0D,0
+MSG_RM: .byte "FILE REMOVED",$0D,0
+MSG_RMDIR: .byte "DIRECTORY REMOVED",$0D,0
+MSG_DISK_ERROR: .byte "? DISK ERROR",$0D,0

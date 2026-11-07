@@ -1,0 +1,21 @@
+OS_PUTS=$F203
+PTR_LO=$00
+PTR_HI=$01
+.org $4000
+START:
+    LDA #<HELP_TEXT
+    STA PTR_LO
+    LDA #>HELP_TEXT
+    STA PTR_HI
+    JSR OS_PUTS
+    RTS
+HELP_TEXT:
+    .byte "DIR            LIST FILES",$0D
+    .byte "CAT NAME       DISPLAY A FILE",$0D
+    .byte "WRITE N T      WRITE TEXT TO A FILE",$0D
+    .byte "MKDIR NAME     CREATE A DIRECTORY",$0D
+    .byte "RM NAME        DELETE A FILE",$0D
+    .byte "RMDIR NAME     REMOVE AN EMPTY DIRECTORY",$0D
+    .byte "CLS            CLEAR SCREEN AND HOME PROMPT",$0D
+    .byte "DEMO           MOVING GRAPHICS SPRITE (ANY KEY EXITS)",$0D
+    .byte "PROGRAMS LOAD AT $4000 AND RETURN WITH RTS",$0D,0
